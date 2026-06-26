@@ -194,7 +194,7 @@ with st.sidebar:
     analyze_btn = st.button("🚀 Run Live Extraction")
 
 # --- 5. Main Execution & Layout ---
-st.title("🛒 UAE Grocery Platform Analyzer & Live Crawler")
+st.title("🛒 Dynamic Platform Analyzer & Live Crawler")
 
 if analyze_btn:
     proxy_to_use = proxy_input.strip() if proxy_input.strip() else None
@@ -204,6 +204,8 @@ if analyze_btn:
     if discovered_urls:
         df_categories, df_products = parse_and_categorize_live_urls(discovered_urls, search_keyword, memory)
         st.session_state['crawled'] = True
+        st.session_state['target_url'] = target_url
+        st.session_state['region'] = region
         st.session_state['total_urls'] = len(discovered_urls)
         st.session_state['cat_data'] = df_categories
         st.session_state['product_data'] = df_products
@@ -211,190 +213,123 @@ if analyze_btn:
     else:
         st.error("Crawler was unable to scrape any URLs.")
 
-# --- 6. The UI Tabs (Mapped exactly to provided HTML) ---
-tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Attributes", "Volume & Scale", "Insights & Data"])
-
-with tab1:
-    # Inject HTML Platform Profiles
-    platform_html = """
-    <p class="section-title">Platform profiles — Dubai grocery</p>
-    <div class="platform-grid">
-      <div class="platform-card">
-        <div class="plat-header">
-          <div class="plat-icon icon-noon">N</div>
-          <div><div class="plat-name">Noon Grocery</div><div class="plat-type">Marketplace + quick commerce</div></div>
-        </div>
-        <div class="badge-row">
-          <span class="badge green">Noon Daily</span><span class="badge amber">Noon Minutes</span><span class="badge blue">Noon Express</span>
-        </div>
-        <div class="badge-row">
-          <span class="badge">Delivery: 30 min – 2 hr</span><span class="badge">Min order: AED 0</span>
-        </div>
-        <div class="note-row">3P marketplace + 1P dark store. Largest SKU depth. Halal flags + EAN trackable.</div>
-      </div>
-      <div class="platform-card">
-        <div class="plat-header">
-          <div class="plat-icon icon-amazon">A</div>
-          <div><div class="plat-name">Amazon.ae Fresh</div><div class="plat-type">Prime-gated delivery</div></div>
-        </div>
-        <div class="badge-row">
-          <span class="badge blue">Amazon Fresh</span><span class="badge purple">LuLu partnership</span>
-        </div>
-        <div class="badge-row">
-          <span class="badge">Delivery: 2 hr scheduled</span><span class="badge">Min order: AED 50</span>
-        </div>
-        <div class="note-row">Prime-only access. Partnered stores (LuLu). Rich PLP attributes incl. star rating.</div>
-      </div>
-      <div class="platform-card featured">
-        <div class="plat-header">
-          <div class="plat-icon icon-insta">I</div>
-          <div><div class="plat-name">Instashop</div><div class="plat-type">On-demand multi-retailer</div></div>
-        </div>
-        <div class="badge-row">
-          <span class="badge green">Now under Talabat</span><span class="badge amber">10,000+ stores</span>
-        </div>
-        <div class="badge-row">
-          <span class="badge">Delivery: ~60 min</span><span class="badge">Acquired: Mar 2026</span>
-        </div>
-        <div class="note-row">Connects to neighbourhood stores. Deepest sub-brand data. GMV ~$631M.</div>
-      </div>
-      <div class="platform-card">
-        <div class="plat-header">
-          <div class="plat-icon icon-talabat">T</div>
-          <div><div class="plat-name">Talabat Mart</div><div class="plat-type">Dark-store quick commerce</div></div>
-        </div>
-        <div class="badge-row">
-          <span class="badge red">Talabat Mart</span><span class="badge amber">Grocery + pharma</span>
-        </div>
-        <div class="badge-row">
-          <span class="badge">Delivery: &lt;20 min</span><span class="badge">IPO: Dec 2024</span>
-        </div>
-        <div class="note-row">Own dark stores. Fastest delivery promise. Instashop merged under Talabat umbrella.</div>
-      </div>
-      <div class="platform-card">
-        <div class="plat-header">
-          <div class="plat-icon icon-careem">C</div>
-          <div><div class="plat-name">Careem Groceries</div><div class="plat-type">Super-app grocery arm</div></div>
-        </div>
-        <div class="badge-row">
-          <span class="badge green">Careem Quik</span><span class="badge">e& majority owned</span>
-        </div>
-        <div class="badge-row">
-          <span class="badge">Delivery: 30–60 min</span><span class="badge">Range +66% in 2024</span>
-        </div>
-        <div class="note-row">Super-app model. Limited standalone PLP. Lighter attribute set.</div>
-      </div>
-    </div>
-    """
-    st.markdown(platform_html, unsafe_allow_html=True)
-
-with tab2:
-    st.markdown('<p class="section-title">Data attributes available on PLP — grocery</p>', unsafe_allow_html=True)
+# --- 6. The UI Tabs (Dynamic Rendering) ---
+if not st.session_state.get('crawled'):
+    st.info("👈 Please configure the Framework Settings in the sidebar and click **'Run Live Extraction'** to dynamically generate the platform profile and analysis.")
+else:
+    tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Attributes", "Volume & Scale", "Insights & Data"])
     
-    # Inject HTML Attribute Table
-    attr_html = """
-    <div style="overflow-x:auto;">
-    <table class="attr-table">
-      <thead>
-        <tr>
-          <th style="width:25%">Attribute</th>
-          <th class="col-plat">Noon</th><th class="col-plat">Amazon</th>
-          <th class="col-plat">Instashop</th><th class="col-plat">Talabat</th><th class="col-plat">Careem</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td><strong>Product name / title</strong></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td></tr>
-        <tr><td><strong>Brand</strong></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="partial">~</span></td></tr>
-        <tr><td><strong>Category / subcategory</strong></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td></tr>
-        <tr><td><strong>Pack size / volume</strong></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="partial">~</span></td><td class="col-plat"><span class="partial">~</span></td></tr>
-        <tr><td><strong>Price & Sale Price (AED)</strong></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td></tr>
-        <tr><td><strong>Unit price (per kg/L)</strong></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="partial">~</span></td><td class="col-plat"><span class="cross">✗</span></td><td class="col-plat"><span class="cross">✗</span></td></tr>
-        <tr><td><strong>EAN / barcode</strong></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="partial">~</span></td><td class="col-plat"><span class="cross">✗</span></td><td class="col-plat"><span class="cross">✗</span></td></tr>
-        <tr><td><strong>Halal certified flag</strong></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="partial">~</span></td><td class="col-plat"><span class="tick">✓</span></td><td class="col-plat"><span class="partial">~</span></td><td class="col-plat"><span class="cross">✗</span></td></tr>
-      </tbody>
-    </table>
-    </div>
-    <div style="font-size:13px;color:gray;margin-bottom:20px;">
-      <span class="tick">✓</span> Available &nbsp;&nbsp;&nbsp; <span class="partial">~</span> Partial &nbsp;&nbsp;&nbsp; <span class="cross">✗</span> Not available
-    </div>
-    """
-    st.markdown(attr_html, unsafe_allow_html=True)
+    domain = urlparse(st.session_state['target_url']).netloc
+    plat_name = domain.replace('www.', '').split('.')[0].title()
     
-    if st.session_state.get('crawled'):
-        st.markdown('<p class="section-title">Live Scraped Attributes Data Table</p>', unsafe_allow_html=True)
-        st.dataframe(st.session_state['product_data'], use_container_width=True)
+    with tab1:
+        platform_html = f"""
+        <p class="section-title">Platform profile — Extracted Target</p>
+        <div class="platform-grid">
+          <div class="platform-card featured">
+            <div class="plat-header">
+              <div class="plat-icon icon-amazon" style="background:#e6f1fb;color:#0c447c;">{plat_name[0]}</div>
+              <div><div class="plat-name">{plat_name}</div><div class="plat-type">{domain}</div></div>
+            </div>
+            <div class="badge-row">
+              <span class="badge blue">Live Extracted</span><span class="badge green">Region: {st.session_state['region']}</span>
+            </div>
+            <div class="badge-row">
+              <span class="badge">Discovered URLs: {st.session_state['total_urls']}</span><span class="badge">Products: {len(st.session_state['product_data'])}</span>
+            </div>
+            <div class="note-row">Dynamically mapped platform. Taxonomy and volume metrics generated in real-time.</div>
+          </div>
+        </div>
+        """
+        st.markdown(platform_html, unsafe_allow_html=True)
 
-with tab3:
-    # Blend static volume insights with live dynamic metrics using the custom HTML grid
-    if st.session_state.get('crawled'):
+    with tab2:
+        st.markdown(f'<p class="section-title">Data attributes available on PLP — {plat_name}</p>', unsafe_allow_html=True)
+        
+        df_prods = st.session_state['product_data']
+        expected_attrs = ["Product Name", "Brand", "L1 Category", "L2 Category", "Price", "Pack Size", "Product URL"]
+        
+        attr_rows = ""
+        for attr in expected_attrs:
+            has_attr = attr in df_prods.columns and not df_prods[attr].isna().all()
+            icon = '<span class="tick">✓</span>' if has_attr else '<span class="cross">✗</span>'
+            attr_rows += f"<tr><td><strong>{attr}</strong></td><td class='col-plat'>{icon}</td></tr>"
+            
+        attr_html = f"""
+        <div style="overflow-x:auto;">
+        <table class="attr-table">
+          <thead>
+            <tr>
+              <th style="width:75%">Attribute</th>
+              <th class="col-plat">{plat_name} Extracted</th>
+            </tr>
+          </thead>
+          <tbody>
+            {attr_rows}
+          </tbody>
+        </table>
+        </div>
+        <div style="font-size:13px;color:gray;margin-bottom:20px;">
+          <span class="tick">✓</span> Successfully Extracted &nbsp;&nbsp;&nbsp; <span class="cross">✗</span> Not Detected
+        </div>
+        """
+        st.markdown(attr_html, unsafe_allow_html=True)
+        
+        st.markdown(f'<p class="section-title">Live Scraped Attributes Data Table - {plat_name}</p>', unsafe_allow_html=True)
+        st.dataframe(df_prods, use_container_width=True)
+
+    with tab3:
         live_vol_html = f"""
         <p class="section-title">Live Scrape Scale Indicators (Dynamic)</p>
         <div class="vol-grid">
-          <div class="vol-card"><div class="vol-label">Crawled Target</div><div class="vol-value">{urlparse(target_url).netloc}</div><div class="vol-sub">Current domain</div></div>
+          <div class="vol-card"><div class="vol-label">Crawled Target</div><div class="vol-value">{domain}</div><div class="vol-sub">Current domain</div></div>
           <div class="vol-card"><div class="vol-label">Links Extracted</div><div class="vol-value">{st.session_state['total_urls']}</div><div class="vol-sub">Total pages visited</div></div>
           <div class="vol-card"><div class="vol-label">Categories Mapped</div><div class="vol-value">{len(st.session_state['cat_data'])}</div><div class="vol-sub">Unique directories</div></div>
           <div class="vol-card"><div class="vol-label">Products Identified</div><div class="vol-value">{len(st.session_state['product_data'])}</div><div class="vol-sub">Items isolated</div></div>
         </div>
         """
         st.markdown(live_vol_html, unsafe_allow_html=True)
-
-    static_vol_html = """
-    <p class="section-title">Market Scale Indicators (UAE Platform Baseline)</p>
-    <div class="vol-grid">
-      <div class="vol-card"><div class="vol-label">Instashop GMV (2025)</div><div class="vol-value">$631M</div><div class="vol-sub">+16% YoY</div></div>
-      <div class="vol-card"><div class="vol-label">Talabat + Instashop GMV</div><div class="vol-value">$2.5B+</div><div class="vol-sub">Post-merger</div></div>
-      <div class="vol-card"><div class="vol-label">Instashop partner stores</div><div class="vol-value">10,000+</div><div class="vol-sub">UAE + Egypt</div></div>
-      <div class="vol-card"><div class="vol-label">Talabat Mart peak delivery</div><div class="vol-value">&lt;20 min</div><div class="vol-sub">Dark store model</div></div>
-    </div>
-    
-    <p class="section-title">Estimated SKU depth — Dubai grocery</p>
-    <table class="attr-table">
-      <thead><tr><th>Platform</th><th>Est. grocery SKUs</th><th>Categories covered</th></tr></thead>
-      <tbody>
-        <tr><td>Noon Grocery / Minutes</td><td>50,000 – 80,000+</td><td>Ambient, chilled, frozen, fresh</td></tr>
-        <tr><td>Amazon.ae Fresh</td><td>20,000 – 40,000</td><td>Full grocery + specialty</td></tr>
-        <tr><td>Instashop (now Talabat)</td><td>100,000+ across stores</td><td>Full grocery, pharma, pets</td></tr>
-        <tr><td>Talabat Mart</td><td>5,000 – 15,000</td><td>Grocery essentials, snacks</td></tr>
-        <tr><td>Careem Groceries</td><td>5,000 – 10,000</td><td>Essentials, household</td></tr>
-      </tbody>
-    </table>
-    """
-    st.markdown(static_vol_html, unsafe_allow_html=True)
-
-with tab4:
-    insights_html = """
-    <p class="section-title">Key findings & recommendations</p>
-    <ul class="insight-list">
-      <li><div><b>Merger:</b> Instashop is now part of Talabat — acquired in March 2026. Monitor both endpoints; coverage may overlap significantly.</div></li>
-      <li><div><b>Data Integrity:</b> Noon and Amazon offer the richest attribute sets for grocery — including EAN codes, unit pricing, and halal flags.</div></li>
-      <li><div><b>Extraction Flags:</b> Pack size data is inconsistent on Talabat Mart and Careem — embedded within the product name string requiring regex logic.</div></li>
-      <li><div><b>Geography:</b> Pricing and availability vary by Dubai area. Quick-commerce apps use hyperlocal dark stores, so coverage differs by zone.</div></li>
-    </ul>
-    """
-    st.markdown(insights_html, unsafe_allow_html=True)
-    
-    st.divider()
-    st.markdown('<p class="section-title">Taxonomy & Data Export Hub</p>', unsafe_allow_html=True)
-    
-    if st.session_state.get('crawled') and not st.session_state['product_data'].empty:
-        df_prods = st.session_state['product_data']
         
-        c1, c2 = st.columns(2)
-        with c1:
-            correction_product = st.selectbox("Teach AI: Correct Category Mapping", df_prods["Product Name"].unique())
-            new_l1 = st.text_input("Assign Reworked L1 Category")
-            if st.button("Commit Overrides to Memory"):
-                if correction_product not in memory["category_mappings"]:
-                    memory["category_mappings"][correction_product] = {}
-                if new_l1: memory["category_mappings"][correction_product]["L1"] = new_l1
-                save_memory(memory)
-                run_live_site_crawl.clear()
-                st.success("Memory Updated! Run crawl again to apply.")
-                
-        with c2:
-            st.write("Download Currently Scraped Artifacts")
-            csv_data = df_prods.to_csv(index=False).encode('utf-8')
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-            st.download_button("📄 Export Live Data (CSV)", data=csv_data, file_name=f"grocery_scrape_{timestamp}.csv", mime="text/csv")
-    else:
-        st.info("Run the Live Extraction Engine on the sidebar to unlock Data Exports & AI Mapping corrections.")
+        df_prods = st.session_state['product_data']
+        if not df_prods.empty:
+            st.markdown('<p class="section-title">Volume Distribution</p>', unsafe_allow_html=True)
+            vol_df = df_prods.groupby(["L1 Category"]).size().reset_index(name="Volume")
+            fig = px.pie(vol_df, values='Volume', names='L1 Category', hole=0.4)
+            fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=350)
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab4:
+        df_prods = st.session_state['product_data']
+        top_cat = df_prods['L1 Category'].mode()[0] if not df_prods.empty else "N/A"
+        
+        insights_html = f"""
+        <p class="section-title">Automated Extraction Insights</p>
+        <ul class="insight-list">
+          <li><div><b>Extraction Status:</b> Successfully connected to <b>{domain}</b> and mapped {st.session_state['total_urls']} distinct node pathways.</div></li>
+          <li><div><b>Taxonomy Discovery:</b> Identified dominant category structure centered around <b>{top_cat}</b>.</div></li>
+          <li><div><b>Data Quality:</b> Extracted {len(df_prods.columns)} distinct data points per product record based on current site structure.</div></li>
+        </ul>
+        """
+        st.markdown(insights_html, unsafe_allow_html=True)
+        
+        st.divider()
+        st.markdown('<p class="section-title">Taxonomy & Data Export Hub</p>', unsafe_allow_html=True)
+        
+        if not df_prods.empty:
+            c1, c2 = st.columns(2)
+            with c1:
+                correction_product = st.selectbox("Teach AI: Correct Category Mapping", df_prods["Product Name"].unique())
+                new_l1 = st.text_input("Assign Reworked L1 Category")
+                if st.button("Commit Overrides to Memory"):
+                    if correction_product not in memory["category_mappings"]:
+                        memory["category_mappings"][correction_product] = {}
+                    if new_l1: memory["category_mappings"][correction_product]["L1"] = new_l1
+                    save_memory(memory)
+                    run_live_site_crawl.clear()
+                    st.success("Memory Updated! Run crawl again to apply.")
+                    
+            with c2:
+                st.write(f"Download Scraped Artifacts for {plat_name}")
+                csv_data = df_prods.to_csv(index=False).encode('utf-8')
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+                st.download_button("📄 Export Live Data (CSV)", data=csv_data, file_name=f"{plat_name}_scrape_{timestamp}.csv", mime="text/csv")
