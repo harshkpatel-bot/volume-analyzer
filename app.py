@@ -1,234 +1,581 @@
-import streamlit as st
-import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-import json
-import os
-import io
+"""
+
+Web Crawler Framework
+
+=====================
+
+Crawls any website starting from a seed URL, discovers all internal pages,
+
+counts outbound links per page, and exports results to a CSV file.
+
+Usage:
+
+    python web_crawler.py --url https://example.com
+
+    python web_crawler.py --url https://example.com --depth 3 --output results.csv
+
+    python web_crawler.py --url https://example.com --delay 1.5 --workers 5
+
+Requirements:
+
+    pip install requests beautifulsoup4 lxml
+
+"""
+
+import argparse
+
+import csv
+
+import logging
+
 import time
-import random
-import gzip
-import concurrent.futures
-from urllib.parse import urlparse
+
+from collections import deque
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from dataclasses import dataclass, field
+
 from datetime import datetime
-import plotly.express as px
 
-# --- 1. UI/UX Setup & Custom CSS ---
-st.set_page_config(page_title="Volume Analyzer Pro", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
+from typing import Optional
 
-st.markdown("""
-    <style>
-    .stButton>button { width: 100%; border-radius: 8px; transition: all 0.3s ease; }
-    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
-    </style>
-""", unsafe_allow_html=True)
+from urllib.parse import urljoin, urlparse
 
-# --- 2. Memory & Settings ---
-MEMORY_FILE = "framework_memory.json"
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
-]
+import requests
 
-def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, "r") as f:
-            return json.load(f)
-    return {"category_mappings": {}}
+from bs4 import BeautifulSoup
 
-def save_memory(memory):
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(memory, f, indent=4)
+# ──────────────────────────────────────────────
 
-memory = load_memory()
+# Configuration
 
-# --- 3. Enterprise Sitemap Extraction Engine ---
+# ──────────────────────────────────────────────
 
-def get_sitemap_from_robots(base_url, headers, proxies=None):
-    parsed = urlparse(base_url)
-    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    try:
-        resp = requests.get(robots_url, headers=headers, proxies=proxies, timeout=10)
-        if resp.status_code == 200:
-            for line in resp.text.split('\n'):
-                if line.lower().startswith('sitemap:'):
-                    return line.split(':', 1)[1].strip()
-    except:
-        pass
-    return f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"
+logging.basicConfig(
 
-def fetch_single_sitemap(url, headers, proxies=None):
-    try:
-        resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
-        if resp.status_code != 200:
-            return []
-            
-        content = resp.content
-        if url.endswith('.gz') or resp.headers.get('Content-Encoding') == 'gzip':
-            try:
-                content = gzip.decompress(content)
-            except:
-                pass
-                
-        soup = BeautifulSoup(content, 'xml')
-        return [loc.text.strip() for loc in soup.find_all('loc') if not loc.text.strip().endswith('.xml')]
-    except:
-        return []
+    level=logging.INFO,
 
-@st.cache_data(show_spinner=False, ttl=3600)
-def fetch_sitemap_urls(base_url, region, proxy_url=None):
-    headers = {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": f"{region}-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive"
-    }
-    
-    # Configure proxy dict if provided
-    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
-    
-    sitemap_url = get_sitemap_from_robots(base_url, headers, proxies)
-    
-    all_urls = []
-    nested_sitemaps = []
-    
-    try:
-        response = requests.get(sitemap_url, headers=headers, proxies=proxies, timeout=15)
-        
-        if response.status_code == 403:
-            return {"error": "403 Forbidden: The platform firewall blocked this cloud IP address. Please provide a valid Rotating Proxy URL in the configuration panel to bypass this.", "urls": []}
-        elif response.status_code != 200:
-            return {"error": f"Sitemap missing or blocked (HTTP {response.status_code})", "urls": []}
-            
-        content = response.content
-        if sitemap_url.endswith('.gz') or response.headers.get('Content-Encoding') == 'gzip':
-            content = gzip.decompress(content)
-            
-        soup = BeautifulSoup(content, 'xml')
-        
-        for loc in soup.find_all('loc'):
-            url_text = loc.text.strip()
-            if url_text.endswith('.xml') or url_text.endswith('.xml.gz'):
-                nested_sitemaps.append(url_text)
-            else:
-                all_urls.append(url_text)
-                
-        if nested_sitemaps:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                results = executor.map(lambda url: fetch_single_sitemap(url, headers, proxies), nested_sitemaps[:50])
-                for res in results:
-                    all_urls.extend(res)
-                    
-        return {"error": None, "urls": list(set(all_urls))}
-    except Exception as e:
-        return {"error": str(e), "urls": []}
+    format="%(asctime)s [%(levelname)s] %(message)s",
 
-@st.cache_data(show_spinner=False)
-def categorize_and_map_volume(urls, keyword, _current_memory):
-    categories_data = []
-    products_data = []
-    cat_keywords = ['/category/', '/collections/', '/c/', '/shop/', '/store/', '/women', '/men', '/kids', '/brands/']
-    prod_keywords = ['/product/', '/p/', '/item/', '/buy/', '/dp/']
-    
-    for u in urls:
-        u_lower = u.lower()
-        is_product = any(kw in u_lower for kw in prod_keywords) or (u_lower.count('/') > 3 and any(char.isdigit() for char in u.split('/')[-1]))
-        
-        if is_product:
-            product_name = u.split('/')[-1].split('?')[0].replace('-', ' ').replace('.html', '').title()
-            learned_mapping = _current_memory["category_mappings"].get(product_name, {})
-            fallback_l1 = "General Products"
-            if keyword and keyword.lower() in u_lower: fallback_l1 = keyword.capitalize()
-            
-            products_data.append({
-                "Product URL": u,
-                "Product Name": product_name,
-                "L1 Category": learned_mapping.get("L1", fallback_l1),
-                "L2 Category": learned_mapping.get("L2", "N/A"),
-            })
-        elif any(kw in u_lower for kw in cat_keywords) or u_lower.count('/') <= 4:
-            categories_data.append({
-                "Category Name": u.split('/')[-1].replace('-', ' ').title() or "Root",
-                "Source URL": u
-            })
-            
-    return pd.DataFrame(categories_data).drop_duplicates(), pd.DataFrame(products_data)
+    datefmt="%H:%M:%S",
 
-# --- 4. Sidebar ---
-with st.sidebar:
-    st.title("Framework Config")
-    target_url = st.text_input("🔗 Source Platform URL", "https://www.myntra.com")
-    region = st.text_input("🌍 Region Code", "IN")
-    search_keyword = st.text_input("🔍 Tracking Keyword", "")
-    
-    st.subheader("🛡️ Network Routing (Optional)")
-    proxy_input = st.text_input(
-        "Rotating Proxy URL", 
-        placeholder="http://username:password@proxy.server.com:port",
-        help="Paste your rotating residential proxy link here to avoid 403 blocks on enterprise networks."
+)
+
+log = logging.getLogger(__name__)
+
+DEFAULT_HEADERS = {
+
+    "User-Agent": (
+
+        "Mozilla/5.0 (compatible; WebCrawlerFramework/1.0; "
+
+        "+https://github.com/your-repo)"
+
     )
-    
-    analyze_btn = st.button("🚀 Run Volume Analysis")
 
-# --- 5. Main Execution ---
-st.title("⚡ Enterprise Sitemap Mapper")
+}
 
-# Handle empty string inputs for proxies safely
-proxy_to_use = proxy_input.strip() if proxy_input.strip() else None
+# ──────────────────────────────────────────────
 
-if analyze_btn:
-    with st.spinner(f"Running routed extraction for {target_url}..."):
-        sitemap_result = fetch_sitemap_urls(target_url, region, proxy_to_use)
-        
-        if sitemap_result["error"]:
-            st.error(sitemap_result["error"])
-        elif not sitemap_result["urls"]:
-            st.warning("Sitemap connected, but returned zero crawlable paths.")
-        else:
-            df_categories, df_products = categorize_and_map_volume(sitemap_result["urls"], search_keyword, memory)
-            st.session_state['total_urls'] = len(sitemap_result["urls"])
-            st.session_state['cat_data'] = df_categories
-            st.session_state['product_data'] = df_products
-            st.success("Extraction Complete!")
+# Data Model
 
-# --- 6. Dashboard App ---
-if 'product_data' in st.session_state:
-    df_cats = st.session_state['cat_data']
-    df_products = st.session_state['product_data']
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Platform URLs", st.session_state['total_urls'])
-    col2.metric("Categories Found", len(df_cats))
-    col3.metric("Products Found", len(df_products))
-    
-    tab1, tab2, tab3 = st.tabs(["📊 Volume & Visuals", "🧠 AI Corrections", "📥 Export Data"])
-    
-    with tab1:
-        if not df_products.empty:
-            vol_df = df_products.groupby(["L1 Category"]).size().reset_index(name="Volume")
-            fig = px.pie(vol_df, values='Volume', names='L1 Category', hole=0.4)
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(df_products.head(500), use_container_width=True) 
-        else:
-            st.info("No specific product structures found.")
+# ──────────────────────────────────────────────
 
-    with tab2:
-        if not df_products.empty:
-            correction_product = st.selectbox("Select Target URL Pattern", df_products["Product Name"].unique())
-            new_l1 = st.text_input("Assign New L1 Category")
-            if st.button("Update Knowledge Base"):
-                if correction_product not in memory["category_mappings"]:
-                    memory["category_mappings"][correction_product] = {}
-                if new_l1: memory["category_mappings"][correction_product]["L1"] = new_l1
-                save_memory(memory)
-                fetch_sitemap_urls.clear()
-                categorize_and_map_volume.clear()
-                st.success("Memory updated! Please re-run analysis to apply.")
+@dataclass
 
-    with tab3:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-        if not df_products.empty:
-            csv_data = df_products.to_csv(index=False).encode('utf-8')
-            st.download_button("📄 Download CSV", data=csv_data, file_name=f"sitemap_{timestamp}.csv", mime="text/csv")
+class PageNode:
+
+    """Represents a single crawled page (node) in the site graph."""
+
+    url: str
+
+    parent_url: str = ""
+
+    status_code: int = 0
+
+    page_title: str = ""
+
+    depth: int = 0
+
+    internal_links: int = 0          # links pointing to same domain
+
+    external_links: int = 0          # links pointing outside the domain
+
+    total_links: int = 0             # all <a href> tags found
+
+    word_count: int = 0              # rough content word count
+
+    crawled_at: str = ""
+
+    error: str = ""
+
+    child_urls: list = field(default_factory=list, repr=False)
+
+
+# ──────────────────────────────────────────────
+
+# Core Crawler
+
+# ──────────────────────────────────────────────
+
+class WebCrawler:
+
+    """
+
+    Generic web crawler that maps a site's node structure and link volumes.
+
+    Parameters
+
+    ----------
+
+    seed_url   : The starting URL (must include scheme, e.g. https://).
+
+    max_depth  : How many hops from the seed to follow (default 2).
+
+    max_pages  : Hard cap on total pages crawled (default 200).
+
+    delay      : Seconds to wait between requests (default 0.5).
+
+    workers    : Concurrent threads for fetching (default 5).
+
+    timeout    : HTTP request timeout in seconds (default 10).
+
+    output     : CSV filename to write results to.
+
+    """
+
+    def __init__(
+
+        self,
+
+        seed_url: str,
+
+        max_depth: int = 2,
+
+        max_pages: int = 200,
+
+        delay: float = 0.5,
+
+        workers: int = 5,
+
+        timeout: int = 10,
+
+        output: str = "crawl_results.csv",
+
+    ):
+
+        parsed = urlparse(seed_url)
+
+        if not parsed.scheme or not parsed.netloc:
+
+            raise ValueError(f"Invalid URL: {seed_url!r}. Include scheme e.g. https://")
+
+        self.seed_url = seed_url.rstrip("/")
+
+        self.base_domain = parsed.netloc
+
+        self.max_depth = max_depth
+
+        self.max_pages = max_pages
+
+        self.delay = delay
+
+        self.workers = workers
+
+        self.timeout = timeout
+
+        self.output = output
+
+        self.visited: set[str] = set()
+
+        self.nodes: list[PageNode] = []
+
+        self.session = requests.Session()
+
+        self.session.headers.update(DEFAULT_HEADERS)
+
+    # ── Helpers ──────────────────────────────
+
+    def _normalize(self, url: str) -> str:
+
+        """Strip fragments and trailing slashes for deduplication."""
+
+        parsed = urlparse(url)
+
+        clean = parsed._replace(fragment="").geturl()
+
+        return clean.rstrip("/")
+
+    def _is_internal(self, url: str) -> bool:
+
+        return urlparse(url).netloc == self.base_domain
+
+    def _is_crawlable(self, url: str) -> bool:
+
+        """Skip non-HTML resource extensions."""
+
+        skip_exts = {
+
+            ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp",
+
+            ".mp4", ".mp3", ".zip", ".tar", ".gz", ".exe", ".dmg",
+
+            ".css", ".js", ".woff", ".woff2", ".ttf", ".ico",
+
+        }
+
+        path = urlparse(url).path.lower()
+
+        return not any(path.endswith(ext) for ext in skip_exts)
+
+    # ── Fetch & Parse ─────────────────────────
+
+    def _fetch(self, url: str, parent: str, depth: int) -> PageNode:
+
+        """Fetch a single URL and extract node data."""
+
+        node = PageNode(
+
+            url=url,
+
+            parent_url=parent,
+
+            depth=depth,
+
+            crawled_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+
+        )
+
+        try:
+
+            resp = self.session.get(url, timeout=self.timeout, allow_redirects=True)
+
+            node.status_code = resp.status_code
+
+            if resp.status_code != 200:
+
+                node.error = f"HTTP {resp.status_code}"
+
+                return node
+
+            content_type = resp.headers.get("Content-Type", "")
+
+            if "text/html" not in content_type:
+
+                node.error = f"Skipped: content-type={content_type}"
+
+                return node
+
+            soup = BeautifulSoup(resp.text, "lxml")
+
+            # Page title
+
+            title_tag = soup.find("title")
+
+            node.page_title = title_tag.get_text(strip=True) if title_tag else ""
+
+            # Word count (body text only)
+
+            body = soup.find("body")
+
+            if body:
+
+                node.word_count = len(body.get_text(separator=" ").split())
+
+            # Link analysis
+
+            all_anchors = soup.find_all("a", href=True)
+
+            node.total_links = len(all_anchors)
+
+            for a in all_anchors:
+
+                href = a["href"].strip()
+
+                if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+
+                    continue
+
+                abs_url = self._normalize(urljoin(url, href))
+
+                if not abs_url.startswith("http"):
+
+                    continue
+
+                if self._is_internal(abs_url):
+
+                    node.internal_links += 1
+
+                    if self._is_crawlable(abs_url):
+
+                        node.child_urls.append(abs_url)
+
+                else:
+
+                    node.external_links += 1
+
+        except requests.exceptions.Timeout:
+
+            node.error = "Timeout"
+
+        except requests.exceptions.ConnectionError as e:
+
+            node.error = f"ConnectionError: {e}"
+
+        except Exception as e:
+
+            node.error = f"Error: {e}"
+
+        return node
+
+    # ── BFS Crawl ─────────────────────────────
+
+    def crawl(self) -> list[PageNode]:
+
+        """
+
+        BFS crawl starting from seed_url.
+
+        Returns the list of all crawled PageNode objects.
+
+        """
+log.info(f"Starting crawl → {self.seed_url}")
+log.info(f"Settings: max_depth={self.max_depth}, max_pages={self.max_pages}, "
+
+                 f"workers={self.workers}, delay={self.delay}s")
+
+        # Queue entries: (url, parent_url, depth)
+
+        queue: deque[tuple[str, str, int]] = deque()
+
+        queue.append((self.seed_url, "", 0))
+
+        self.visited.add(self.seed_url)
+
+        while queue and len(self.nodes) < self.max_pages:
+
+            # Build a batch of up to `workers` URLs from the same depth level
+
+            batch: list[tuple[str, str, int]] = []
+
+            while queue and len(batch) < self.workers:
+
+                item = queue.popleft()
+
+                if len(self.nodes) + len(batch) >= self.max_pages:
+
+                    break
+
+                batch.append(item)
+
+            if not batch:
+
+                break
+
+            # Fetch batch concurrently
+
+            with ThreadPoolExecutor(max_workers=self.workers) as pool:
+
+                futures = {
+
+                    pool.submit(self._fetch, url, parent, depth): (url, parent, depth)
+
+                    for url, parent, depth in batch
+
+                }
+
+                for future in as_completed(futures):
+
+                    node = future.result()
+
+                    self.nodes.append(node)
+log.info(
+
+                        f"[{len(self.nodes):>4}] depth={node.depth} "
+
+                        f"links={node.internal_links}in/{node.external_links}out "
+
+                        f"→ {node.url[:80]}"
+
+                    )
+
+                    # Enqueue children if within depth limit
+
+                    if node.depth < self.max_depth:
+
+                        for child_url in node.child_urls:
+
+                            if child_url not in self.visited and len(self.visited) < self.max_pages * 2:
+
+                                self.visited.add(child_url)
+
+                                queue.append((child_url, node.url, node.depth + 1))
+
+            if self.delay > 0:
+
+                time.sleep(self.delay)
+log.info(f"Crawl complete. {len(self.nodes)} pages visited.")
+
+        return self.nodes
+
+    # ── CSV Export ────────────────────────────
+
+    def export_csv(self, filepath: Optional[str] = None) -> str:
+
+        """Write all crawled nodes to a CSV file. Returns the file path."""
+
+        out = filepath or self.output
+
+        fieldnames = [
+
+            "url",
+
+            "parent_url",
+
+            "depth",
+
+            "status_code",
+
+            "page_title",
+
+            "internal_links",
+
+            "external_links",
+
+            "total_links",
+
+            "word_count",
+
+            "crawled_at",
+
+            "error",
+
+        ]
+
+        with open(out, "w", newline="", encoding="utf-8") as f:
+
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+            writer.writeheader()
+
+            for node in self.nodes:
+
+                writer.writerow({k: getattr(node, k) for k in fieldnames})
+log.info(f"CSV saved → {out}")
+
+        return out
+
+    # ── Summary ───────────────────────────────
+
+    def print_summary(self):
+
+        """Print a quick summary table to the terminal."""
+
+        total = len(self.nodes)
+
+        ok = sum(1 for n in self.nodes if n.status_code == 200)
+
+        errors = sum(1 for n in self.nodes if n.error)
+
+        total_internal = sum(n.internal_links for n in self.nodes)
+
+        total_external = sum(n.external_links for n in self.nodes)
+
+        print("\n" + "═" * 60)
+
+        print(f"  CRAWL SUMMARY — {self.seed_url}")
+
+        print("═" * 60)
+
+        print(f"  Pages crawled     : {total}")
+
+        print(f"  Successful (200)  : {ok}")
+
+        print(f"  Errors / skipped  : {errors}")
+
+        print(f"  Total internal Δ  : {total_internal}")
+
+        print(f"  Total external Δ  : {total_external}")
+
+        print("═" * 60)
+
+        # Top 10 pages by internal link count
+
+        top = sorted(self.nodes, key=lambda n: n.internal_links, reverse=True)[:10]
+
+        print("\n  TOP PAGES BY INTERNAL LINKS")
+
+        print(f"  {'Links':>6}  URL")
+
+        print("  " + "─" * 56)
+
+        for n in top:
+
+            print(f"  {n.internal_links:>6}  {n.url[:70]}")
+
+        print()
+
+
+# ──────────────────────────────────────────────
+
+# CLI Entry Point
+
+# ──────────────────────────────────────────────
+
+def main():
+
+    parser = argparse.ArgumentParser(
+
+        description="Web Crawler Framework — maps node-level URLs and link volumes to CSV.",
+
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+
+    )
+
+    parser.add_argument("--url",      required=True,  help="Seed URL to start crawling (include https://)")
+
+    parser.add_argument("--depth",    type=int,   default=2,    help="Max crawl depth from seed")
+
+    parser.add_argument("--pages",    type=int,   default=200,  help="Max total pages to crawl")
+
+    parser.add_argument("--delay",    type=float, default=0.5,  help="Seconds between request batches")
+
+    parser.add_argument("--workers",  type=int,   default=5,    help="Concurrent fetch threads")
+
+    parser.add_argument("--timeout",  type=int,   default=10,   help="HTTP timeout per request (seconds)")
+
+    parser.add_argument("--output",   default="crawl_results.csv", help="Output CSV filename")
+
+    args = parser.parse_args()
+
+    crawler = WebCrawler(
+
+        seed_url=args.url,
+
+        max_depth=args.depth,
+
+        max_pages=args.pages,
+
+        delay=args.delay,
+
+        workers=args.workers,
+
+        timeout=args.timeout,
+
+        output=args.output,
+
+    )
+
+    crawler.crawl()
+
+    crawler.export_csv()
+
+    crawler.print_summary()
+
+
+if __name__ == "__main__":
+
+    main()
+Example Domain
+ 
