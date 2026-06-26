@@ -6,43 +6,35 @@ import json
 import os
 import io
 import time
-from urllib.parse import urlparse, urljoin
+import random
+import concurrent.futures
+from urllib.parse import urlparse
 from datetime import datetime
 import plotly.express as px
 
 # --- 1. UI/UX Setup & Custom CSS ---
 st.set_page_config(page_title="Volume Analyzer Pro", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS for better aesthetics and animations
 st.markdown("""
     <style>
-    .stButton>button {
-        width: 100%;
-        border-radius: 8px;
-        transition: all 0.3s ease;
-    }
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-    }
-    .metric-card {
-        background-color: #f8f9fa;
-        border-radius: 10px;
-        padding: 15px;
-        border-left: 5px solid #ff4b4b;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.05);
-    }
+    .stButton>button { width: 100%; border-radius: 8px; transition: all 0.3s ease; }
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. Self-Learning Memory Management ---
+# --- 2. Memory & Settings ---
 MEMORY_FILE = "framework_memory.json"
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
+]
 
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         with open(MEMORY_FILE, "r") as f:
             return json.load(f)
-    return {"selectors": {}, "category_mappings": {}}
+    return {"category_mappings": {}}
 
 def save_memory(memory):
     with open(MEMORY_FILE, "w") as f:
@@ -50,192 +42,138 @@ def save_memory(memory):
 
 memory = load_memory()
 
-# --- 3. Adaptive Extraction Engine ---
-def scrape_actual_metadata_and_categories(url, region, headers):
+# --- 3. High-Speed Extraction Engine (Cached) ---
+def fetch_single_sitemap(url, headers):
+    """Helper function for multi-threading nested sitemaps."""
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        meta_title = soup.title.string.strip() if soup.title else "N/A"
-        meta_desc_tag = soup.find("meta", attrs={"name": "description"})
-        meta_desc = meta_desc_tag["content"].strip() if meta_desc_tag else "N/A"
-        
-        extracted_categories = []
-        for a_tag in soup.find_all('a', href=True):
-            text = a_tag.get_text(strip=True)
-            href = a_tag['href']
-            href_lower = href.lower()
-            if text and len(text) > 2 and any(kw in href_lower for kw in ['category', 'shop', 'collection', 'c/', 'products/']):
-                extracted_categories.append({
-                    "Category Name": text,
-                    "Source URL": urljoin(url, href)
-                })
-        
-        cat_df = pd.DataFrame(extracted_categories).drop_duplicates().reset_index(drop=True)
-        return {"title": meta_title, "description": meta_desc, "categories_df": cat_df, "raw_soup": soup}
-    except Exception as e:
-        return {"error": str(e)}
+        resp = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(resp.content, 'xml')
+        return [loc.text.strip() for loc in soup.find_all('loc') if not loc.text.strip().endswith('.xml')]
+    except:
+        return []
 
-def extract_product_volume_data(url, keyword, soup, domain):
-    scraped_data = []
-    for i in range(1, 26):  # Increased to 25 for better chart visuals
-        product_name = f"{keyword.capitalize()} Model {i}" if keyword else f"Product {i}"
-        learned_mapping = memory["category_mappings"].get(product_name, {})
-        
-        # Simulating varied categories for visual chart appeal
-        fallback_l1 = "Electronics" if i % 2 == 0 else "Accessories"
-        if i % 3 == 0: fallback_l1 = "Software"
-        
-        scraped_data.append({
-            "Node URL": url,
-            "Product URL": f"{url}/product/{i}",
-            "Product Name": product_name,
-            "Brand Name": f"Brand {chr(64 + (i % 4) + 1)}",
-            "Price": 100.0 + (i * 15.50),
-            "Discount": f"{i % 20}%",
-            "L1 Category": learned_mapping.get("L1", fallback_l1),
-            "L2 Category": learned_mapping.get("L2", "N/A")
-        })
-    return pd.DataFrame(scraped_data)
-
-# --- 4. Sidebar Configuration ---
-with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2822/2822672.png", width=60) # Placeholder generic logo
-    st.title("Framework Config")
-    st.divider()
-    target_url = st.text_input("🔗 Target URL", "https://books.toscrape.com/")
-    region = st.text_input("🌍 Region Code (e.g., US, UK)", "US")
-    search_keyword = st.text_input("🔍 Search Keyword", "Books")
+@st.cache_data(show_spinner=False, ttl=3600) # Caches results for 1 hour to prevent re-scraping
+def fetch_sitemap_urls(base_url, region):
+    parsed = urlparse(base_url)
+    sitemap_url = f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"
+    headers = {"User-Agent": random.choice(USER_AGENTS), "Accept-Language": f"{region}-US,en;q=0.9"}
     
+    all_urls = []
+    nested_sitemaps = []
+    
+    try:
+        response = requests.get(sitemap_url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            return {"error": f"Sitemap not found (HTTP {response.status_code})", "urls": []}
+            
+        soup = BeautifulSoup(response.content, 'xml')
+        for loc in soup.find_all('loc'):
+            url_text = loc.text.strip()
+            if url_text.endswith('.xml'):
+                nested_sitemaps.append(url_text)
+            else:
+                all_urls.append(url_text)
+                
+        # Multi-threading for nested sitemaps to maximize speed
+        if nested_sitemaps:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                results = executor.map(lambda url: fetch_single_sitemap(url, headers), nested_sitemaps[:50]) # Cap at 50 sub-sitemaps for safety
+                for res in results:
+                    all_urls.extend(res)
+                    
+        return {"error": None, "urls": list(set(all_urls))}
+    except Exception as e:
+        return {"error": str(e), "urls": []}
+
+@st.cache_data(show_spinner=False)
+def categorize_and_map_volume(urls, keyword, _current_memory):
+    categories_data = []
+    products_data = []
+    cat_keywords = ['/category/', '/collections/', '/c/', '/shop/', '/store/']
+    prod_keywords = ['/product/', '/p/', '/item/', '/buy/']
+    
+    for u in urls:
+        u_lower = u.lower()
+        if any(kw in u_lower for kw in cat_keywords) or u_lower.count('/') <= 4:
+            categories_data.append({
+                "Category Name": u.split('/')[-1].replace('-', ' ').replace('.html', '').title() or "Root",
+                "Source URL": u
+            })
+            
+        if any(kw in u_lower for kw in prod_keywords) or u_lower.count('/') > 4:
+            product_name = u.split('/')[-1].replace('-', ' ').replace('.html', '').title()
+            learned_mapping = _current_memory["category_mappings"].get(product_name, {})
+            fallback_l1 = "General Products"
+            if keyword and keyword.lower() in u_lower: fallback_l1 = keyword.capitalize()
+            
+            products_data.append({
+                "Product URL": u,
+                "Product Name": product_name,
+                "L1 Category": learned_mapping.get("L1", fallback_l1),
+                "L2 Category": learned_mapping.get("L2", "N/A"),
+            })
+            
+    return pd.DataFrame(categories_data).drop_duplicates(), pd.DataFrame(products_data)
+
+# --- 4. Sidebar ---
+with st.sidebar:
+    st.title("Framework Config")
+    target_url = st.text_input("🔗 Source Platform URL", "https://books.toscrape.com/")
+    region = st.text_input("🌍 Region Code", "US")
+    search_keyword = st.text_input("🔍 Tracking Keyword", "")
     analyze_btn = st.button("🚀 Run Volume Analysis")
 
-# --- 5. Main Execution & Interactive UI ---
-st.title("⚡ Volume Analyzer & Metadata Mapper")
-st.markdown("Extract, visualize, and map e-commerce taxonomy seamlessly.")
+# --- 5. Main Execution ---
+st.title("⚡ High-Speed Sitemap Mapper")
 
 if analyze_btn:
-    # Animated Progress Phase
-    progress_text = "Establishing connection..."
-    my_bar = st.progress(0, text=progress_text)
-    
-    domain = urlparse(target_url).netloc
-    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": f"{region}-US,en;q=0.9"}
-    
-    time.sleep(0.5)
-    my_bar.progress(30, text=f"Scraping metadata from {domain}...")
-    site_data = scrape_actual_metadata_and_categories(target_url, region, headers)
-    
-    if "error" in site_data:
-        st.error(f"Failed to fetch data: {site_data['error']}")
-        my_bar.empty()
-    else:
-        time.sleep(0.5)
-        my_bar.progress(70, text="Extracting product payloads & mapping L1-L5...")
-        df_products = extract_product_volume_data(target_url, search_keyword, site_data["raw_soup"], domain)
+    with st.spinner("Executing multi-threaded sitemap extraction..."):
+        sitemap_result = fetch_sitemap_urls(target_url, region)
         
-        my_bar.progress(100, text="Finalizing datasets...")
-        time.sleep(0.3)
-        my_bar.empty()
-        st.toast('Extraction Complete! 🚀', icon='✅')
-        
-        st.session_state['site_data'] = site_data
-        st.session_state['product_data'] = df_products
+        if sitemap_result["error"] and not sitemap_result["urls"]:
+            st.error(f"Failed: {sitemap_result['error']}")
+        else:
+            df_categories, df_products = categorize_and_map_volume(sitemap_result["urls"], search_keyword, memory)
+            st.session_state['total_urls'] = len(sitemap_result["urls"])
+            st.session_state['cat_data'] = df_categories
+            st.session_state['product_data'] = df_products
+            st.success("Extraction Complete!")
 
-# --- 6. The Dashboard App ---
+# --- 6. Dashboard App ---
 if 'product_data' in st.session_state:
-    site_data = st.session_state['site_data']
+    df_cats = st.session_state['cat_data']
     df_products = st.session_state['product_data']
     
-    # Top-Level Metric KPIs
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Products Extracted", len(df_products), "+12% vs last run")
-    col2.metric("Categories Found", len(site_data['categories_df']))
-    col3.metric("Unique Brands", df_products['Brand Name'].nunique())
-    col4.metric("Avg Price", f"${df_products['Price'].mean():.2f}")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Platform URLs", st.session_state['total_urls'])
+    col2.metric("Categories Found", len(df_cats))
+    col3.metric("Products Found", len(df_products))
     
-    st.divider()
-    
-    # Modern Tabbed Interface
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Data & Visuals", "🌐 Source Metadata", "🧠 AI Corrections", "📥 Export Hub"])
+    tab1, tab2, tab3 = st.tabs(["📊 Volume & Visuals", "🧠 AI Corrections", "📥 Export Data"])
     
     with tab1:
-        st.subheader("Volume Distribution by Category")
-        # Interactive Plotly Sunburst/Donut Chart
-        vol_df = df_products.groupby(["L1 Category", "Brand Name"]).size().reset_index(name="Volume")
-        
-        fig = px.sunburst(
-            vol_df, 
-            path=['L1 Category', 'Brand Name'], 
-            values='Volume',
-            color='L1 Category',
-            color_discrete_sequence=px.colors.qualitative.Pastel
-        )
-        fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=400)
-        
-        chart_col, data_col = st.columns([1.5, 1])
-        with chart_col:
+        if not df_products.empty:
+            vol_df = df_products.groupby(["L1 Category"]).size().reset_index(name="Volume")
+            fig = px.pie(vol_df, values='Volume', names='L1 Category', hole=0.4)
             st.plotly_chart(fig, use_container_width=True)
-            
-        with data_col:
-            st.dataframe(vol_df.sort_values(by="Volume", ascending=False), height=400, use_container_width=True)
-            
-        with st.expander("View Full Raw Extracted Product Data"):
-            st.dataframe(df_products, use_container_width=True)
+            st.dataframe(df_products.head(500), use_container_width=True) 
 
     with tab2:
-        meta_c1, meta_c2 = st.columns([1, 1.5])
-        with meta_c1:
-            st.info("📌 **Live Meta Title**")
-            st.write(site_data['title'])
-            st.info("📝 **Live Meta Description**")
-            st.write(site_data['description'])
-        with meta_c2:
-            st.write(f"**Discovered Navigational Categories ({len(site_data['categories_df'])} nodes)**")
-            if not site_data['categories_df'].empty:
-                st.dataframe(site_data['categories_df'], use_container_width=True)
-            else:
-                st.warning("No standard navigation categories detected.")
+        if not df_products.empty:
+            correction_product = st.selectbox("Select Target URL Pattern", df_products["Product Name"].unique())
+            new_l1 = st.text_input("Assign New L1 Category")
+            if st.button("Update Knowledge Base"):
+                if correction_product not in memory["category_mappings"]:
+                    memory["category_mappings"][correction_product] = {}
+                if new_l1: memory["category_mappings"][correction_product]["L1"] = new_l1
+                save_memory(memory)
+                # Clear cache so the next run uses the new memory
+                fetch_sitemap_urls.clear()
+                categorize_and_map_volume.clear()
+                st.success("Memory updated! Please re-run analysis to apply.")
 
     with tab3:
-        st.subheader("Teach the Framework")
-        st.markdown("Correct the taxonomy below. The system will save this to `framework_memory.json` and auto-apply it next time.")
-        
-        form_c1, form_c2 = st.columns(2)
-        with form_c1:
-            correction_product = st.selectbox("Select Target Product", df_products["Product Name"].unique())
-            new_l1 = st.text_input("Assign L1 Category", placeholder="e.g., Electronics")
-        with form_c2:
-            st.write("") # Spacing
-            st.write("")
-            new_l2 = st.text_input("Assign L2 Category", placeholder="e.g., Laptops")
-            
-        if st.button("✨ Update Knowledge Base", type="primary"):
-            if correction_product not in memory["category_mappings"]:
-                memory["category_mappings"][correction_product] = {}
-            if new_l1: memory["category_mappings"][correction_product]["L1"] = new_l1
-            if new_l2: memory["category_mappings"][correction_product]["L2"] = new_l2
-            
-            save_memory(memory)
-            st.success("Memory updated! Re-run the analysis to see changes applied.")
-            st.balloons() # Fun interaction
-
-    with tab4:
-        st.subheader("Download Artifacts")
-        st.markdown("Export the current session data into your preferred format.")
-        
         timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-        
-        dl_c1, dl_c2, dl_c3 = st.columns(3)
-        
-        csv_data = df_products.to_csv(index=False).encode('utf-8')
-        dl_c1.download_button("📄 Download CSV", data=csv_data, file_name=f"data_{timestamp}.csv", mime="text/csv", use_container_width=True)
-        
-        json_data = df_products.to_json(orient="records", indent=4)
-        dl_c2.download_button("🧩 Download JSON", data=json_data, file_name=f"data_{timestamp}.json", mime="application/json", use_container_width=True)
-        
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            df_products.to_excel(writer, index=False, sheet_name='Products')
-            if not site_data['categories_df'].empty:
-                site_data['categories_df'].to_excel(writer, index=False, sheet_name='Categories')
-        dl_c3.download_button("📊 Download Excel", data=excel_buffer.getvalue(), file_name=f"data_{timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        if not df_products.empty:
+            csv_data = df_products.to_csv(index=False).encode('utf-8')
+            st.download_button("📄 Download CSV", data=csv_data, file_name=f"sitemap_{timestamp}.csv", mime="text/csv")
